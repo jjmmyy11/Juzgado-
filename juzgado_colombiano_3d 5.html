@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Juzgado Colombiano 3D</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#0b0d12; font-family: 'Segoe UI', Arial, sans-serif; }
+  #canvas-container { width:100vw; height:100vh; display:block; }
+  #hud {
+    position:fixed; top:14px; left:14px; z-index:10;
+    background:rgba(15,20,30,0.72); backdrop-filter: blur(6px);
+    color:#f2f2f2; padding:14px 18px; border-radius:10px;
+    border:1px solid rgba(255,255,255,0.12); max-width:300px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  #hud h1 { font-size:15px; margin:0 0 6px 0; letter-spacing:0.5px; color:#ffd447; }
+  #hud p { font-size:12px; line-height:1.5; margin:4px 0; color:#d8dce3; }
+  #hud .tag { display:inline-block; background:#1e2532; border:1px solid #3a4356; border-radius:6px; padding:2px 7px; font-size:11px; margin:2px 3px 0 0; color:#9fd0ff;}
+  #legend {
+    position:fixed; bottom:14px; left:14px; z-index:10;
+    background:rgba(15,20,30,0.72); backdrop-filter: blur(6px);
+    color:#f2f2f2; padding:10px 14px; border-radius:10px;
+    border:1px solid rgba(255,255,255,0.12); font-size:11px; line-height:1.7;
+    box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  #legend b { color:#ffd447; }
+  #loading {
+    position:fixed; inset:0; background:#0b0d12; color:#f2f2f2;
+    display:flex; align-items:center; justify-content:center; z-index:100;
+    font-size:14px; letter-spacing:1px; flex-direction:column; gap:10px;
+  }
+  #loading .spinner {
+    width:34px; height:34px; border:3px solid #2a3140; border-top-color:#ffd447;
+    border-radius:50%; animation:spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #labelLayer { position:fixed; inset:0; pointer-events:none; z-index:5; }
+  .tag3d {
+    position:absolute; transform:translate(-50%,-100%);
+    background:rgba(10,14,20,0.78); color:#ffe9a8; padding:3px 8px;
+    border-radius:5px; font-size:11px; white-space:nowrap;
+    border:1px solid rgba(255,212,71,0.35); pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<div id="loading"><div class="spinner"></div><div>Construyendo el juzgado…</div></div>
+<div id="canvas-container"></div>
+<div id="labelLayer"></div>
+
+<div id="hud">
+  <h1>⚖ JUZGADO DE LA REPÚBLICA DE COLOMBIA</h1>
+  <p>Sala de audiencias en 3D, generada por código (Three.js).</p>
+  <p>Arrastra para rotar · rueda para zoom · clic derecho para desplazar.</p>
+  <div>
+    <span class="tag">Estrado del Juez</span>
+    <span class="tag">Testigo</span>
+    <span class="tag">Secretaría</span>
+    <span class="tag">Fiscalía</span>
+    <span class="tag">Defensa</span>
+    <span class="tag">Público</span>
+  </div>
+</div>
+
+<div id="legend">
+  <div><b>Amarillo–Azul–Rojo:</b> Bandera de Colombia</div>
+  <div><b>Escudo:</b> sobre el estrado principal</div>
+  <div><b>Barra:</b> separa la sala del público</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+/* =========================================================
+   JUZGADO COLOMBIANO 3D — escena completa generada por código
+   ========================================================= */
+
+let scene, camera, renderer, controls;
+const labelLayer = document.getElementById('labelLayer');
+const labels = []; // {obj, el, offsetY}
+
+try {
+  init();
+  buildCourtroom();
+  animate();
+} catch (err) {
+  const l = document.getElementById('loading');
+  l.innerHTML = '<div style="max-width:80%;text-align:center;line-height:1.6;">⚠️ No se pudo cargar la escena 3D.<br><span style="font-size:11px;opacity:0.7;">'+ (err && err.message ? err.message : err) +'</span><br><br><span style="font-size:12px;opacity:0.8;">Verifica tu conexión a internet e intenta abrir el archivo de nuevo en Safari.</span></div>';
+  console.error(err);
+}
+
+function init(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1f29);
+  scene.fog = new THREE.Fog(0x1a1f29, 22, 55);
+
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 200);
+  camera.position.set(0, 8, 17);
+
+  renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.physicallyCorrectLights = false;
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  controls = new SimpleOrbitControls(camera, renderer.domElement, {
+    target: new THREE.Vector3(0, 3, 0),
+    minDistance: 4,
+    maxDistance: 40
+  });
+
+  window.addEventListener('resize', onResize);
+  document.getElementById('loading').style.display = 'none';
+}
+
+/* ---------- controles de cámara propios (orbit + pinch zoom) ---------- */
+function SimpleOrbitControls(camera, domEl, opts){
+  const self = this;
+  this.target = opts.target || new THREE.Vector3(0,0,0);
+  const minDistance = opts.minDistance || 2;
+  const maxDistance = opts.maxDistance || 50;
+  const maxPolar = Math.PI/2 - 0.02;
+  const minPolar = 0.15;
+
+  const offset = new THREE.Vector3().subVectors(camera.position, this.target);
+  let radius = offset.length();
+  let theta = Math.atan2(offset.x, offset.z);      // ángulo horizontal
+  let phi = Math.acos(Math.min(1, Math.max(-1, offset.y / radius))); // ángulo vertical
+
+  let targetTheta = theta, targetPhi = phi, targetRadius = radius;
+
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+  let pinchDist = null;
+
+  function applyLimits(){
+    targetPhi = Math.max(minPolar, Math.min(maxPolar, targetPhi));
+    targetRadius = Math.max(minDistance, Math.min(maxDistance, targetRadius));
+  }
+
+  function getDist(t1, t2){
+    const dx = t1.clientX - t2.clientX, dy = t1.clientY - t2.clientY;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  domEl.style.touchAction = 'none';
+
+  domEl.addEventListener('pointerdown', (e)=>{
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    try{ domEl.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  domEl.addEventListener('pointerup', (e)=>{ dragging = false; });
+  domEl.addEventListener('pointercancel', ()=>{ dragging = false; });
+  domEl.addEventListener('pointerleave', ()=>{ dragging = false; });
+
+  domEl.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    targetTheta -= dx * 0.006;
+    targetPhi -= dy * 0.006;
+    applyLimits();
+  });
+
+  domEl.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    targetRadius += e.deltaY * 0.01;
+    applyLimits();
+  }, { passive:false });
+
+  // pellizco (pinch) táctil para zoom en iPhone/iPad
+  domEl.addEventListener('touchstart', (e)=>{
+    if(e.touches.length === 2){
+      pinchDist = getDist(e.touches[0], e.touches[1]);
+    }
+  }, { passive:true });
+
+  domEl.addEventListener('touchmove', (e)=>{
+    if(e.touches.length === 2 && pinchDist !== null){
+      const d = getDist(e.touches[0], e.touches[1]);
+      const delta = pinchDist - d;
+      targetRadius += delta * 0.02;
+      applyLimits();
+      pinchDist = d;
+    }
+  }, { passive:true });
+
+  domEl.addEventListener('touchend', (e)=>{
+    if(e.touches.length < 2) pinchDist = null;
+  }, { passive:true });
+
+  this.update = function(){
+    theta += (targetTheta - theta) * 0.12;
+    phi += (targetPhi - phi) * 0.12;
+    radius += (targetRadius - radius) * 0.12;
+
+    const sinPhiRadius = Math.sin(phi) * radius;
+    camera.position.x = self.target.x + sinPhiRadius * Math.sin(theta);
+    camera.position.y = self.target.y + Math.cos(phi) * radius;
+    camera.position.z = self.target.z + sinPhiRadius * Math.cos(theta);
+    camera.lookAt(self.target);
+  };
+}
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* ---------- utilidades de texturas por canvas ---------- */
+
+function makeWoodTexture(baseColor, lineColor, repeatX, repeatY){
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(0,0,256,256);
+  for(let i=0;i<40;i++){
+    ctx.strokeStyle = lineColor;
+    ctx.globalAlpha = 0.10 + Math.random()*0.12;
+    ctx.beginPath();
+    const y = Math.random()*256;
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(80, y+ (Math.random()*10-5), 170, y+(Math.random()*10-5), 256, y);
+    ctx.lineWidth = 1 + Math.random()*1.5;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  return tex;
+}
+
+function makeMarbleFloorTexture(){
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#cfd3d8';
+  ctx.fillRect(0,0,512,512);
+  ctx.strokeStyle = '#9aa1ab';
+  ctx.lineWidth = 2;
+  for(let i=0;i<=512;i+=64){
+    ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,512); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(512,i); ctx.stroke();
+  }
+  for(let i=0;i<200;i++){
+    ctx.strokeStyle = 'rgba(140,145,155,0.25)';
+    ctx.beginPath();
+    const x = Math.random()*512, y = Math.random()*512;
+    ctx.moveTo(x,y);
+    ctx.lineTo(x + (Math.random()*40-20), y + (Math.random()*40-20));
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6,6);
+  return tex;
+}
+
+function makeFlagTexture(){
+  const c = document.createElement('canvas');
+  c.width = 300; c.height = 200;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#FCD116'; ctx.fillRect(0,0,300,100);
+  ctx.fillStyle = '#003893'; ctx.fillRect(0,100,300,50);
+  ctx.fillStyle = '#CE1126'; ctx.fillRect(0,150,300,50);
+  return new THREE.CanvasTexture(c);
+}
+
+function makeEmblemTexture(){
+  // placa institucional estilizada (no reproduce el escudo oficial en detalle, es una representación genérica)
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 300;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0c2340';
+  ctx.fillRect(0,0,512,300);
+  ctx.strokeStyle = '#d8b24a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(10,10,492,280);
+
+  // óvalo heráldico estilizado con tricolor
+  ctx.save();
+  ctx.translate(256,120);
+  ctx.beginPath();
+  ctx.ellipse(0,0,80,95,0,0,Math.PI*2);
+  ctx.clip();
+  ctx.fillStyle = '#FCD116'; ctx.fillRect(-90,-95,180,63);
+  ctx.fillStyle = '#003893'; ctx.fillRect(-90,-32,180,32);
+  ctx.fillStyle = '#CE1126'; ctx.fillRect(-90,0,180,95);
+  ctx.restore();
+  ctx.strokeStyle = '#d8b24a'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(256,120,80,95,0,0,Math.PI*2); ctx.stroke();
+
+  ctx.fillStyle = '#f3e6bf';
+  ctx.font = 'bold 26px Georgia';
+  ctx.textAlign = 'center';
+  ctx.fillText('REPÚBLICA DE COLOMBIA', 256, 250);
+  ctx.font = '18px Georgia';
+  ctx.fillText('RAMA JUDICIAL', 256, 278);
+
+  return new THREE.CanvasTexture(c);
+}
+
+/* ---------- etiquetas 2D flotantes ---------- */
+function addLabel(text, object3D, offsetY=0.3){
+  const el = document.createElement('div');
+  el.className = 'tag3d';
+  el.textContent = text;
+  labelLayer.appendChild(el);
+  labels.push({ obj: object3D, el, offsetY });
+}
+
+function updateLabels(){
+  const v = new THREE.Vector3();
+  labels.forEach(l=>{
+    l.obj.getWorldPosition(v);
+    v.y += l.offsetY;
+    v.project(camera);
+    const x = (v.x*0.5+0.5) * window.innerWidth;
+    const y = (-v.y*0.5+0.5) * window.innerHeight;
+    const behind = v.z > 1;
+    l.el.style.display = behind ? 'none' : 'block';
+    l.el.style.left = x+'px';
+    l.el.style.top = y+'px';
+  });
+}
+
+/* ================= CONSTRUCCIÓN DE LA SALA ================= */
+
+function buildCourtroom(){
+  buildLighting();
+  buildRoomShell();
+  buildColumns();
+  buildJudgeBench();
+  buildFlagAndEmblem();
+  buildClerkDesk();
+  buildWitnessStand();
+  buildCounselTables();
+  buildBar();
+  buildGallery();
+  buildDoor();
+  buildCeilingLamps();
+}
+
+function buildLighting(){
+  const hemi = new THREE.HemisphereLight(0xfdf6e3, 0x33251a, 0.55);
+  scene.add(hemi);
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.28);
+  scene.add(ambient);
+
+  const key = new THREE.DirectionalLight(0xfff2d0, 0.9);
+  key.position.set(-8, 14, 8);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048,2048);
+  key.shadow.camera.left = -18; key.shadow.camera.right = 18;
+  key.shadow.camera.top = 18; key.shadow.camera.bottom = -18;
+  key.shadow.camera.far = 40;
+  key.shadow.bias = -0.0015;
+  scene.add(key);
+
+  const fill = new THREE.DirectionalLight(0xbcd4ff, 0.25);
+  fill.position.set(10, 8, -6);
+  scene.add(fill);
+}
+
+function buildRoomShell(){
+  const ROOM_W = 20, ROOM_D = 26, ROOM_H = 9;
+
+  const floorTex = makeMarbleFloorTexture();
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(ROOM_W, ROOM_D),
+    new THREE.MeshStandardMaterial({ map: floorTex, roughness:0.5, metalness:0.05 })
+  );
+  floor.rotation.x = -Math.PI/2;
+  floor.position.set(0,0,-1);
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  const wallMat = new THREE.MeshStandardMaterial({ color:0xece6d8, roughness:0.9 });
+  const wallMatAccent = new THREE.MeshStandardMaterial({ color:0x8a6b3d, roughness:0.7 });
+
+  // muro trasero (detrás del juez)
+  const backWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_H), wallMat);
+  backWall.position.set(0, ROOM_H/2, -12);
+  backWall.receiveShadow = true;
+  scene.add(backWall);
+
+  // zócalo de madera muro trasero
+  const backWainscot = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, 2.2, 0.12), wallMatAccent);
+  backWainscot.position.set(0, 1.1, -11.93);
+  scene.add(backWainscot);
+
+  // muros laterales
+  const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, ROOM_H), wallMat);
+  leftWall.rotation.y = Math.PI/2;
+  leftWall.position.set(-ROOM_W/2, ROOM_H/2, -1);
+  leftWall.receiveShadow = true;
+  scene.add(leftWall);
+
+  const rightWall = leftWall.clone();
+  rightWall.rotation.y = -Math.PI/2;
+  rightWall.position.set(ROOM_W/2, ROOM_H/2, -1);
+  scene.add(rightWall);
+
+  // muro frontal (con hueco de puerta, dos paneles)
+  const frontWallL = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W/2-1.2, ROOM_H), wallMat);
+  frontWallL.rotation.y = Math.PI;
+  frontWallL.position.set(-(ROOM_W/4+0.6), ROOM_H/2, 13);
+  scene.add(frontWallL);
+  const frontWallR = frontWallL.clone();
+  frontWallR.position.set((ROOM_W/4+0.6), ROOM_H/2, 13);
+  scene.add(frontWallR);
+  const frontWallTop = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.2), wallMat);
+  frontWallTop.rotation.y = Math.PI;
+  frontWallTop.position.set(0, ROOM_H-1.1, 13);
+  scene.add(frontWallTop);
+
+  // techo
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_D), new THREE.MeshStandardMaterial({ color:0xf5f2ea, roughness:1, side:THREE.DoubleSide }));
+  ceiling.rotation.x = Math.PI/2;
+  ceiling.position.set(0, ROOM_H, -1);
+  scene.add(ceiling);
+
+  // ventanas laterales estilizadas (marco + vidrio azulado)
+  for(const side of [-1,1]){
+    for(let i=0;i<3;i++){
+      const z = -8 + i*6.5;
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3, 1.8), wallMatAccent);
+      frame.position.set(side*(20/2-0.06), 5.2, z);
+      scene.add(frame);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.7), new THREE.MeshStandardMaterial({ color:0x9db8d8, roughness:0.15, metalness:0.3, transparent:true, opacity:0.55 }));
+      glass.rotation.y = side===1 ? -Math.PI/2 : Math.PI/2;
+      glass.position.set(side*(20/2-0.13), 5.2, z);
+      scene.add(glass);
+    }
+  }
+}
+
+function buildColumns(){
+  const colMat = new THREE.MeshStandardMaterial({ color:0xe4dcc6, roughness:0.6 });
+  const positions = [-9, 9];
+  for(const x of positions){
+    for(let z=-9; z<=9; z+=6){
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.5,8.6,20), colMat);
+      col.position.set(x, 4.3, z);
+      col.castShadow = true;
+      scene.add(col);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.62,0.62,0.25,20), colMat);
+      cap.position.set(x, 8.65, z);
+      scene.add(cap);
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.6,0.2,20), colMat);
+      base.position.set(x, 0.1, z);
+      scene.add(base);
+    }
+  }
+}
+
+function woodMat(){
+  return new THREE.MeshStandardMaterial({ map: makeWoodTexture('#6b4226','#3e2513',2,2), roughness:0.55, metalness:0.05 });
+}
+function darkWoodMat(){
+  return new THREE.MeshStandardMaterial({ map: makeWoodTexture('#4a2f1c','#2a1a0f',2,2), roughness:0.5 });
+}
+
+function buildJudgeBench(){
+  const g = new THREE.Group();
+
+  // plataforma elevada (estrado)
+  const platform = new THREE.Mesh(new THREE.BoxGeometry(9, 0.6, 3.4), darkWoodMat());
+  platform.position.set(0, 0.9, -9.5);
+  platform.castShadow = true; platform.receiveShadow = true;
+  g.add(platform);
+
+  const steps = new THREE.Mesh(new THREE.BoxGeometry(9, 0.3, 0.5), darkWoodMat());
+  steps.position.set(0, 0.45, -7.95);
+  g.add(steps);
+
+  // mueble del estrado (frente)
+  const deskFront = new THREE.Mesh(new THREE.BoxGeometry(7.4, 1.5, 0.5), woodMat());
+  deskFront.position.set(0, 1.95, -8.3);
+  deskFront.castShadow = true;
+  g.add(deskFront);
+
+  // superficie del escritorio
+  const deskTop = new THREE.Mesh(new THREE.BoxGeometry(7.8, 0.15, 2.0), darkWoodMat());
+  deskTop.position.set(0, 2.75, -8.9);
+  deskTop.castShadow = true;
+  g.add(deskTop);
+
+  // paneles laterales del estrado
+  for(const x of [-3.7, 3.7]){
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.5, 1.9), woodMat());
+    side.position.set(x, 1.95, -8.9);
+    g.add(side);
+  }
+
+  // respaldo alto detrás del juez
+  const backdrop = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3.6, 0.25), darkWoodMat());
+  backdrop.position.set(0, 4.4, -11.6);
+  g.add(backdrop);
+  const backdropFrame = new THREE.Mesh(new THREE.BoxGeometry(6.9, 4.0, 0.12), new THREE.MeshStandardMaterial({ color:0xc7a95a, metalness:0.4, roughness:0.4 }));
+  backdropFrame.position.set(0, 4.4, -11.68);
+  g.add(backdropFrame);
+
+  // silla del juez
+  const chair = buildOfficeChair(0xb5121b, 1.2);
+  chair.position.set(0, 0.9, -10.6);
+  chair.rotation.y = Math.PI;
+  g.add(chair);
+
+  // martillo (mazo) sobre el escritorio
+  const gavel = new THREE.Group();
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.5,10), darkWoodMat());
+  handle.rotation.z = Math.PI/2;
+  gavel.add(handle);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,0.22,12), darkWoodMat());
+  head.rotation.z = Math.PI/2;
+  head.position.x = 0.28;
+  gavel.add(head);
+  gavel.position.set(1.6, 2.86, -8.85);
+  g.add(gavel);
+
+  // microfono
+  const micBase = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.06,0.05,10), new THREE.MeshStandardMaterial({color:0x222}));
+  micBase.position.set(-1.2, 2.8, -8.85);
+  g.add(micBase);
+  const micArm = new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,0.5,8), new THREE.MeshStandardMaterial({color:0x222}));
+  micArm.position.set(-1.2, 3.05, -8.85);
+  g.add(micArm);
+  const micHead = new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10), new THREE.MeshStandardMaterial({color:0x111}));
+  micHead.position.set(-1.2, 3.3, -8.85);
+  g.add(micHead);
+
+  scene.add(g);
+  addLabel('Estrado del Juez', platform, 3.1);
+}
+
+function buildOfficeChair(color, scale=1){
+  const g = new THREE.Group();
+  const leatherMat = new THREE.MeshStandardMaterial({ color, roughness:0.5 });
+  const frameMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a, metalness:0.6, roughness:0.4 });
+
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55,0.12,0.55), leatherMat);
+  seat.position.y = 0.5; seat.castShadow = true;
+  g.add(seat);
+
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.55,0.75,0.12), leatherMat);
+  back.position.set(0, 0.95, -0.24);
+  back.castShadow = true;
+  g.add(back);
+
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,0.5,10), frameMat);
+  pole.position.y = 0.24;
+  g.add(pole);
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.32,0.05,12), frameMat);
+  base.position.y = 0.02;
+  g.add(base);
+
+  g.scale.set(scale,scale,scale);
+  return g;
+}
+
+function buildFlagAndEmblem(){
+  // asta y bandera de Colombia junto al estrado
+  const poleMat = new THREE.MeshStandardMaterial({ color:0x3a3a3a, metalness:0.7, roughness:0.3 });
+  for(const x of [-4.6, 4.6]){
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,4.2,10), poleMat);
+    pole.position.set(x, 3.0, -11.4);
+    scene.add(pole);
+    const finial = new THREE.Mesh(new THREE.SphereGeometry(0.09,10,10), new THREE.MeshStandardMaterial({color:0xd8b24a, metalness:0.8, roughness:0.2}));
+    finial.position.set(x, 5.1, -11.4);
+    scene.add(finial);
+
+    const flagTex = makeFlagTexture();
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.9, 10, 6), new THREE.MeshStandardMaterial({ map:flagTex, side:THREE.DoubleSide, roughness:0.8 }));
+    flag.position.set(x + (x>0?0.68:-0.68), 4.55, -11.4);
+    flag.rotation.y = x>0 ? 0.15 : -0.15;
+    scene.add(flag);
+    if(x<0) addLabel('Bandera de Colombia', flag, 0.7);
+  }
+
+  // escudo / placa institucional sobre el respaldo del juez
+  const emblemTex = makeEmblemTexture();
+  const emblem = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.55), new THREE.MeshStandardMaterial({ map: emblemTex, roughness:0.6 }));
+  emblem.position.set(0, 6.3, -11.55);
+  scene.add(emblem);
+  addLabel('Escudo institucional', emblem, 0.9);
+}
+
+function buildClerkDesk(){
+  const g = new THREE.Group();
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(2.4,0.9,1.1), woodMat());
+  desk.position.set(-6.2, 0.45, -6.6);
+  desk.castShadow = true; desk.receiveShadow = true;
+  g.add(desk);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(2.5,0.08,1.2), darkWoodMat());
+  top.position.set(-6.2, 0.94, -6.6);
+  g.add(top);
+
+  // laptop simplificado
+  const lap = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.4,0.02,0.3), new THREE.MeshStandardMaterial({color:0x2a2a2a}));
+  base.position.set(-6.2, 1.0, -6.6);
+  lap.add(base);
+  const screen = new THREE.Mesh(new THREE.BoxGeometry(0.4,0.28,0.02), new THREE.MeshStandardMaterial({color:0x111, emissive:0x2255aa, emissiveIntensity:0.3}));
+  screen.position.set(-6.2, 1.15, -6.75);
+  screen.rotation.x = -0.25;
+  lap.add(screen);
+  g.add(lap);
+
+  const chair = buildOfficeChair(0x2c2c2c, 1.0);
+  chair.position.set(-6.2, 0, -7.4);
+  g.add(chair);
+
+  scene.add(g);
+  addLabel('Secretaría', desk, 0.9);
+}
+
+function buildWitnessStand(){
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9,1.0,0.5,16), darkWoodMat());
+  base.position.set(3.6, 0.25, -6.4);
+  base.castShadow = true; base.receiveShadow = true;
+  g.add(base);
+
+  const railGeo = new THREE.TorusGeometry(0.85, 0.05, 8, 24, Math.PI*1.4);
+  const rail = new THREE.Mesh(railGeo, woodMat());
+  rail.position.set(3.6, 1.15, -6.4);
+  rail.rotation.x = Math.PI/2;
+  rail.rotation.z = -0.9;
+  g.add(rail);
+
+  for(let i=0;i<5;i++){
+    const a = (-0.7 + i*0.35);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.65,8), woodMat());
+    post.position.set(3.6 + Math.sin(a)*0.85, 0.85, -6.4 + Math.cos(a)*0.85*0.4 - 0.3);
+    g.add(post);
+  }
+
+  const chair = buildOfficeChair(0x5a3d21, 0.95);
+  chair.position.set(3.6, 0.5, -6.35);
+  g.add(chair);
+
+  scene.add(g);
+  addLabel('Estrado de testigos', base, 1.3);
+}
+
+function buildCounselTables(){
+  // Mesa de Fiscalía (izquierda) y Defensa (derecha), enfrentando al juez
+  const configs = [
+    { x:-3.4, color:0x8a1f1f, label:'Fiscalía', chairs:2 },
+    { x: 3.4, color:0x1f3d8a, label:'Defensa', chairs:2 }
+  ];
+
+  configs.forEach(cfg=>{
+    const g = new THREE.Group();
+    const table = new THREE.Mesh(new THREE.BoxGeometry(2.6,0.75,1.1), woodMat());
+    table.position.set(cfg.x, 0.375, -3.5);
+    table.castShadow = true; table.receiveShadow = true;
+    g.add(table);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(2.7,0.06,1.2), darkWoodMat());
+    top.position.set(cfg.x, 0.78, -3.5);
+    g.add(top);
+
+    // placa identificatoria
+    const plateTex = document.createElement('canvas');
+    plateTex.width = 256; plateTex.height = 64;
+    const pctx = plateTex.getContext('2d');
+    pctx.fillStyle = '#111'; pctx.fillRect(0,0,256,64);
+    pctx.fillStyle = '#e8c766'; pctx.font = 'bold 26px Georgia'; pctx.textAlign='center';
+    pctx.fillText(cfg.label.toUpperCase(), 128, 42);
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.22), new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(plateTex)}));
+    plate.position.set(cfg.x, 0.9, -2.92);
+    plate.rotation.x = -0.3;
+    g.add(plate);
+
+    for(let i=0;i<cfg.chairs;i++){
+      const chair = buildOfficeChair(cfg.color, 0.95);
+      chair.position.set(cfg.x - 0.6 + i*1.2, 0, -2.5);
+      chair.rotation.y = Math.PI;
+      g.add(chair);
+    }
+
+    // carpetas/documentos
+    for(let i=0;i<3;i++){
+      const doc = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.03,0.4), new THREE.MeshStandardMaterial({color: i%2? 0xd8d0b8:0xc2b18a}));
+      doc.position.set(cfg.x -0.6 + i*0.5, 0.82, -3.5);
+      doc.rotation.y = Math.random()*0.3;
+      g.add(doc);
+    }
+
+    scene.add(g);
+    addLabel(cfg.label, table, 0.85);
+  });
+}
+
+function buildBar(){
+  // barra/baranda que separa la sala del público
+  const g = new THREE.Group();
+  const railMat = new THREE.MeshStandardMaterial({ color:0x6b4226, roughness:0.5 });
+  const postMat = new THREE.MeshStandardMaterial({ color:0x3a2716, roughness:0.5 });
+
+  const topRail = new THREE.Mesh(new THREE.BoxGeometry(15, 0.12, 0.12), railMat);
+  topRail.position.set(0, 1.0, 0.6);
+  g.add(topRail);
+
+  for(let x=-7; x<=7; x+=1.2){
+    if(Math.abs(x) < 1.1) continue; // hueco central de paso
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,1.0,10), postMat);
+    post.position.set(x, 0.5, 0.6);
+    g.add(post);
+  }
+  // paneles de entrada (puertitas)
+  for(const side of [-1,1]){
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.85,0.06), railMat);
+    gate.position.set(side*0.55, 0.5, 0.6);
+    gate.rotation.y = side*0.5;
+    g.add(gate);
+  }
+
+  scene.add(g);
+}
+
+function buildGallery(){
+  // bancas del público en filas, orientadas hacia el juez
+  const benchMat = woodMat();
+  const rows = 4;
+  const startZ = 3.0;
+  for(let r=0;r<rows;r++){
+    const z = startZ + r*2.0;
+    const bench = new THREE.Group();
+
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(9.5,0.12,0.5), benchMat);
+    seat.position.set(0, 0.5, z);
+    seat.castShadow = true; seat.receiveShadow = true;
+    bench.add(seat);
+
+    const back = new THREE.Mesh(new THREE.BoxGeometry(9.5,0.55,0.1), benchMat);
+    back.position.set(0, 0.85, z+0.24);
+    bench.add(back);
+
+    for(let x=-4.5; x<=4.5; x+=4.5){
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.5,0.45), darkWoodMat());
+      leg.position.set(x, 0.25, z);
+      bench.add(leg);
+    }
+    scene.add(bench);
+    if(r===0) addLabel('Público', seat, 0.9);
+  }
+}
+
+function buildDoor(){
+  const doorMat = darkWoodMat();
+  const door = new THREE.Mesh(new THREE.BoxGeometry(1.9, 3.0, 0.12), doorMat);
+  door.position.set(0, 1.5, 12.9);
+  door.castShadow = true;
+  scene.add(door);
+
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.06,10,10), new THREE.MeshStandardMaterial({color:0xc7a95a, metalness:0.8, roughness:0.2}));
+  handle.position.set(0.7, 1.5, 12.83);
+  scene.add(handle);
+
+  const frame = new THREE.Mesh(new THREE.TorusGeometry(1, 0.06, 8, 4), new THREE.MeshStandardMaterial({color:0xd8b24a, metalness:0.5, roughness:0.4}));
+  // simple frame using box border instead (torus with 4 segments looks like a square-ish loop but let's just skip complexity)
+  scene.remove(frame);
+
+  addLabel('Entrada', door, 1.7);
+}
+
+function buildCeilingLamps(){
+  const lampPositions = [[-4,-6],[4,-6],[-4,0],[4,0],[-4,6],[4,6]];
+  lampPositions.forEach(([x,z])=>{
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.6,6), new THREE.MeshStandardMaterial({color:0x222}));
+    cord.position.set(x, 8.4, z);
+    scene.add(cord);
+
+    const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.45,0.35,16,1,true), new THREE.MeshStandardMaterial({color:0xd8c27a, side:THREE.DoubleSide, emissive:0x554422, emissiveIntensity:0.4}));
+    shade.position.set(x, 8.0, z);
+    scene.add(shade);
+
+    const bulb = new THREE.PointLight(0xffe8b8, 0.55, 9, 2);
+    bulb.position.set(x, 7.85, z);
+    scene.add(bulb);
+  });
+}
+
+/* ================= LOOP ================= */
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  updateLabels();
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
